@@ -31,14 +31,14 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
 
 ### Step 3: Push and Deploy
 1.  **In VS Code (Work Computer):**
-    ```powershell
+    powershell
     git add .
     git commit -m "Fix Docker build context"
     git push
     ```
 
 2.  **On DietPi:**
-    ```bash
+    bash
     cd /opt/media-sync-app
     git pull
     docker compose up -d --build
