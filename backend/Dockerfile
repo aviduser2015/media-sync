@@ -1,17 +1,30 @@
-git add .
-git commit -m "Fill empty Dockerfile"
-git push
+# --- STAGE 1: Build Frontend ---
+FROM node:18-alpine as build-frontend
+WORKDIR /app/frontend
 
-### Step 3: Deploy on DietPi
-In your DietPi terminal:
+# Copy frontend package files
+COPY ../frontend/package*.json ./
+RUN npm install
 
-```bash
-cd /opt/media-sync-app
-git fetch --all
-git reset --hard origin/main
-docker compose up -d --build
+# Copy source code and build
+COPY ../frontend .
+RUN npm run build
+# Output is now in /app/frontend/dist
 
-**What to expect:**
-This time, the build will actually start. You will see lines like `[app build-frontend 1/6] FROM docker.io/library/node...`. It will take **2-5 minutes** to finish because it is building the whole app from scratch.
+# --- STAGE 2: Run Backend ---
+FROM python:3.9-slim
 
-Once it stops scrolling and says `Started media-sync`, go to **[http://192.168.100.65:8090](http://192.168.100.65:8090)**.
+WORKDIR /app
+
+# Install Backend Dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy Backend Code
+COPY ./app ./app
+
+# Copy Built Frontend from Stage 1 into a 'static' folder
+COPY --from=build-frontend /app/frontend/dist ./static
+
+# Run on port 8090
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
