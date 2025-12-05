@@ -144,6 +144,78 @@ class PlexService:
         except Exception:
             return []
 
+    def _extract_ids_from_guid(self, guid: str) -> Dict[str, Optional[str]]:
+        """Pull TMDB/TVDB/IMDB ids plus any type hints from a Plex guid string."""
+        ids: Dict[str, Optional[str]] = {"tmdb_id": None, "tvdb_id": None, "imdb_id": None, "type_hint": None}
+        if not guid:
+            return ids
+
+        raw = guid.lower()
+        # Type hint from known prefixes
+        if raw.startswith("plex://show/") or "/show/" in raw or "/tv/" in raw:
+            ids["type_hint"] = "show"
+        elif raw.startswith("plex://movie/") or "/movie/" in raw:
+            ids["type_hint"] = "movie"
+
+        def _clean(val: str) -> str:
+            return val.split("?")[0].split("/")[-1]
+
+        if "tmdb://" in raw:
+            ids["tmdb_id"] = _clean(guid.split("://", 1)[1])
+            if "/movie/" in raw:
+                ids["type_hint"] = ids["type_hint"] or "movie"
+            if "/tv/" in raw:
+                ids["type_hint"] = ids["type_hint"] or "show"
+        if "tvdb://" in raw:
+            ids["tvdb_id"] = _clean(guid.split("://", 1)[1])
+            ids["type_hint"] = ids["type_hint"] or "show"
+        if "imdb://" in raw:
+            ids["imdb_id"] = _clean(guid.split("://", 1)[1])
+            # IMDB can be movie or show; leave type hint unchanged
+
+        return ids
+
+    def _fetch_metadata(self, rating_key: str) -> Optional[Dict[str, Any]]:
+        """Look up metadata from Plex provider to disambiguate movies vs series."""
+        if not rating_key:
+            return None
+        try:
+            endpoint = f"https://metadata.provider.plex.tv/library/metadata/{urllib.parse.quote(str(rating_key))}"
+            resp = requests.get(endpoint, headers=self.headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            meta = data.get("MediaContainer", {}).get("Metadata", [])
+            if not meta:
+                return None
+            item = meta[0]
+            guid = item.get("guid", "") or ""
+            ids = self._extract_ids_from_guid(guid)
+            tmdb_id = ids.get("tmdb_id")
+            if not tmdb_id and guid.startswith("tmdb://"):
+                tmdb_id = guid.split("://", 1)[1].split("?")[0].split("/")[-1]
+            return {
+                "type": item.get("type"),
+                "title": item.get("title"),
+                "year": item.get("year"),
+                "tmdb_id": tmdb_id,
+                "thumb": item.get("thumb"),
+                "guid_type_hint": ids.get("type_hint"),
+            }
+        except Exception:
+            return None
+
+    def _infer_media_type(self, guid: str, category: str, link: str) -> Optional[str]:
+        """Best-effort type detection from guid/category/link strings."""
+        for val in (guid, category, link):
+            if not val:
+                continue
+            lower = val.lower()
+            if "show" in lower or "series" in lower or "/tv/" in lower:
+                return "show"
+            if "movie" in lower or "film" in lower:
+                return "movie"
+        return None
+
     def _parse_rss_feed(self, url: str, source: str) -> List[Dict[str, Any]]:
         try:
             resp = requests.get(url, headers={"Accept": "application/rss+xml"}, timeout=20)
@@ -166,18 +238,31 @@ class PlexService:
                 if thumb is not None:
                     poster = thumb.attrib.get("url", "")
                 year = ""
-                description = item.findtext("description") or ""
                 # Best-effort year extraction
                 for token in title.split():
                     if token.isdigit() and len(token) == 4:
                         year = token
                         break
+                category = item.findtext("category") or ""
+                ids = self._extract_ids_from_guid(guid)
+                type_hint = ids.get("type_hint") or self._infer_media_type(guid, category, link) or "movie"
+
+                # For ambiguous items, fetch Plex metadata to get the real type/id
+                meta = None
+                if ids.get("type_hint") is None or ("show" in category.lower() and type_hint == "movie"):
+                    meta = self._fetch_metadata(rating_key)
+                resolved_type = meta.get("type") if meta else type_hint
+                tmdb_id = ids.get("tmdb_id") or (meta.get("tmdb_id") if meta else None)
+                poster_final = meta.get("thumb") if meta and meta.get("thumb") else poster
+                year_final = meta.get("year") if meta and meta.get("year") else year
+
                 items.append({
-                    "title": title,
+                    "title": meta.get("title") if meta and meta.get("title") else title,
                     "rating_key": rating_key,
-                    "type": "movie",
-                    "year": year,
-                    "poster": poster,
+                    "type": resolved_type or "movie",
+                    "year": year_final,
+                    "poster": poster_final,
+                    "tmdb_id": tmdb_id,
                     "source": source,
                 })
             return items

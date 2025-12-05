@@ -108,9 +108,14 @@ def run_sync(db: Session) -> Dict[str, Any]:
         logger.info("Watchlist empty or unreachable.")
         return {"movies": {"added": [], "skipped": [], "errors": []}, "shows": {"added": [], "skipped": [], "errors": []}}
 
-    # Default RSS items to movies unless specified
-    movies = [item for item in combined_watchlist if item.get("type") == "movie" or not item.get("type")]
-    shows = [item for item in combined_watchlist if item.get("type") == "show"]
+    # Split movies/shows with a safe default to movie
+    movies, shows = [], []
+    for item in combined_watchlist:
+        item_type = (item.get("type") or "").lower()
+        if item_type in ("show", "series", "tv"):
+            shows.append(item)
+        else:
+            movies.append(item)
 
     stats = {"movies": {"added": [], "skipped": [], "errors": []}, "shows": {"added": [], "skipped": [], "errors": []}}
 

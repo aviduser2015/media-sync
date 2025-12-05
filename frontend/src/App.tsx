@@ -153,7 +153,7 @@ function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-6">
               <WatchlistCard title="My Watchlist" items={watchlists.mine} emptyMessage="Nothing here. Enable auto-sync or add items in Plex." />
               <WatchlistCard title="Friend's Watchlist" items={watchlists.friends} emptyMessage="Friend list is clear." />
             </div>
@@ -266,7 +266,7 @@ function WatchlistCard({ title, items, emptyMessage }: { title: string; items: W
             <div key={item.rating_key || item.title} className="bg-surface rounded-lg overflow-hidden border border-gray-800">
               <div className="relative">
                 <div
-                  className="h-40 bg-cover bg-center"
+                  className="h-56 bg-cover bg-center"
                   style={{ backgroundImage: item.poster ? `url(${item.poster})` : 'linear-gradient(135deg, #1f2937, #111827)' }}
                 />
                 <span className={`absolute top-2 right-2 text-xs px-2 py-1 rounded-full ${statusColor(item.status)}`}>
