@@ -151,6 +151,11 @@ def run_sync(db: Session) -> Dict[str, Any]:
 def background_sync_job():
     db = database.SessionLocal()
     try:
+        auto_flag = str(get_setting(db, "plex.auto_sync", ""))
+        auto_enabled = auto_flag.lower() in ("1", "true", "yes", "on")
+        if not auto_enabled:
+            logger.info("Auto sync disabled; skipping scheduled push.")
+            return
         stats = run_sync(db)
         logger.info(f"Sync complete. Movies added: {len(stats['movies']['added'])}, Shows added: {len(stats['shows']['added'])}")
     except Exception as e:
@@ -162,7 +167,7 @@ def background_sync_job():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
-    scheduler.add_job(background_sync_job, IntervalTrigger(minutes=60), id="sync_job", replace_existing=True)
+    scheduler.add_job(background_sync_job, IntervalTrigger(seconds=60), id="sync_job", replace_existing=True)
     scheduler.start()
     logger.info("Scheduler started.")
     yield
@@ -180,7 +185,7 @@ def get_config(db: Session = Depends(database.get_db)):
             token=get_setting(db, "plex.token", ""),
             rss_my_url=get_setting(db, "plex.rss_my_url", ""),
             rss_friend_url=get_setting(db, "plex.rss_friend_url", ""),
-            auto_sync_enabled=bool(get_setting(db, "plex.auto_sync", ""))
+            auto_sync_enabled=str(get_setting(db, "plex.auto_sync", "")).lower() in ("1", "true", "yes", "on")
         ),
         radarr=RadarrConfig(
             url=get_setting(db, "radarr.url", "http://radarr:7878"),
@@ -244,6 +249,20 @@ def manual_sync_trigger(db: Session = Depends(database.get_db)):
             "details": stats
         }
     }
+
+@app.post("/api/watchlist/remove")
+def remove_watchlist_item(payload: dict = Body(...), db: Session = Depends(database.get_db)):
+    rating_key = payload.get("rating_key")
+    if not rating_key:
+        raise HTTPException(status_code=400, detail="rating_key is required")
+    p_token = get_setting(db, "plex.token")
+    if not p_token:
+        raise HTTPException(status_code=400, detail="Plex token not configured")
+    plex = services.PlexService("", p_token)
+    resp = plex.remove_from_watchlist(rating_key)
+    if not resp.get("success"):
+        raise HTTPException(status_code=400, detail=f"Failed to remove item: {resp}")
+    return {"success": True}
 
 @app.get("/api/watchlists")
 def get_watchlists(db: Session = Depends(database.get_db)):

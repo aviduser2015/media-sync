@@ -199,6 +199,7 @@ class PlexService:
                 "year": item.get("year"),
                 "tmdb_id": tmdb_id,
                 "thumb": item.get("thumb"),
+                "summary": item.get("summary"),
                 "guid_type_hint": ids.get("type_hint"),
             }
         except Exception:
@@ -238,6 +239,7 @@ class PlexService:
                 if thumb is not None:
                     poster = thumb.attrib.get("url", "")
                 year = ""
+                description = item.findtext("description") or ""
                 # Best-effort year extraction
                 for token in title.split():
                     if token.isdigit() and len(token) == 4:
@@ -255,6 +257,7 @@ class PlexService:
                 tmdb_id = ids.get("tmdb_id") or (meta.get("tmdb_id") if meta else None)
                 poster_final = meta.get("thumb") if meta and meta.get("thumb") else poster
                 year_final = meta.get("year") if meta and meta.get("year") else year
+                summary_final = meta.get("summary") if meta and meta.get("summary") else description
 
                 items.append({
                     "title": meta.get("title") if meta and meta.get("title") else title,
@@ -264,6 +267,7 @@ class PlexService:
                     "poster": poster_final,
                     "tmdb_id": tmdb_id,
                     "source": source,
+                    "summary": summary_final,
                 })
             return items
         except Exception:
@@ -274,3 +278,16 @@ class PlexService:
             "mine": self._parse_rss_feed(my_url, "mine") if my_url else [],
             "friends": self._parse_rss_feed(friend_url, "friends") if friend_url else []
         }
+
+    def remove_from_watchlist(self, rating_key: str) -> Dict[str, Any]:
+        """
+        Attempt to remove an item from the Plex watchlist.
+        Note: Plex uses provider metadata ids; rating_key must match the Plex metadata id.
+        """
+        try:
+            endpoint = f"https://metadata.provider.plex.tv/library/metadata/{urllib.parse.quote(str(rating_key))}/unwatchlist"
+            resp = requests.put(endpoint, headers=self.headers, timeout=10)
+            success = resp.status_code in (200, 201, 204)
+            return {"success": success, "status_code": resp.status_code}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

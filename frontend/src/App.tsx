@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Settings, RefreshCw, Server, Activity, Shield, Wifi, HardDrive, TestTube2, Save } from 'lucide-react';
+import { Settings, RefreshCw, Server, Activity, Shield, Wifi, HardDrive, TestTube2, Save, Trash2 } from 'lucide-react';
 import axios from 'axios';
 
 const API_URL = '/api';
@@ -11,6 +11,7 @@ type WatchItem = {
   year?: string;
   type?: string;
   status?: string;
+  summary?: string;
 };
 
 type Watchlists = { mine: WatchItem[]; friends: WatchItem[] };
@@ -32,6 +33,7 @@ function App() {
   const [watchlists, setWatchlists] = useState<Watchlists>({ mine: [], friends: [] });
   const [syncStatus, setSyncStatus] = useState<string>('Idle');
   const [loading, setLoading] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<{ [k: string]: boolean }>({});
@@ -51,17 +53,31 @@ function App() {
     fetchWatchlists();
   }, []);
 
-  const triggerSync = async () => {
+  const pullWatchlists = async () => {
+    setPulling(true);
+    setSyncStatus('Pulling watchlists from Plex...');
+    try {
+      await fetchWatchlists();
+      setSyncStatus('Watchlists refreshed from Plex');
+    } catch (err: any) {
+      console.error(err);
+      setSyncStatus('Failed to pull watchlists');
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  const triggerPush = async () => {
     setLoading(true);
-    setSyncStatus('Starting sync...');
+    setSyncStatus('Pushing to Radarr/Sonarr...');
     try {
       const res = await axios.post(`${API_URL}/sync/run`);
       if (res.data.success) {
         const stats = res.data.stats || { added: [], skipped: [] };
-        setSyncStatus(`Sync Complete! Added: ${stats.added.length}, Skipped: ${stats.skipped.length}`);
+        setSyncStatus(`Push complete. Added: ${stats.added.length}, Skipped: ${stats.skipped.length}`);
         fetchWatchlists();
       } else {
-        setSyncStatus(`Failed: ${res.data.message}`);
+        setSyncStatus(`Push failed: ${res.data.message}`);
       }
     } catch (err: any) {
       console.error(err);
@@ -114,6 +130,17 @@ function App() {
 
   const gridEmpty = useMemo(() => watchlists.mine.length === 0 && watchlists.friends.length === 0, [watchlists]);
 
+  const removeWatchlistItem = async (rating_key: string) => {
+    try {
+      await axios.post(`${API_URL}/watchlist/remove`, { rating_key });
+      await fetchWatchlists();
+      setSyncStatus('Item removed from Plex watchlist');
+    } catch (err) {
+      console.error(err);
+      setSyncStatus('Failed to remove from watchlist');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-surface text-white flex">
       <aside className="w-64 bg-background border-r border-gray-800 flex flex-col hidden md:flex">
@@ -138,24 +165,34 @@ function App() {
                 <p className="text-sm text-gray-400">Plex Watchlists</p>
                 <h2 className="text-3xl font-bold">Dashboard</h2>
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-3 flex-wrap">
                 <button
-                  onClick={triggerSync}
+                  onClick={pullWatchlists}
+                  disabled={pulling}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors ${
+                    pulling ? 'bg-gray-700 cursor-not-allowed' : 'bg-gray-900 border border-gray-700 hover:border-primary'
+                  }`}
+                >
+                  <RefreshCw size={18} className={pulling ? 'animate-spin' : ''} />
+                  {pulling ? 'Pulling...' : 'Pull from Plex'}
+                </button>
+                <button
+                  onClick={triggerPush}
                   disabled={loading}
                   className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors ${
                     loading ? 'bg-gray-700 cursor-not-allowed' : 'bg-primary hover:bg-primary-hover'
                   }`}
                 >
                   <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-                  {loading ? 'Syncing...' : 'Sync Now'}
+                  {loading ? 'Pushing...' : 'Push to Radarr/Sonarr'}
                 </button>
                 <span className="text-sm text-gray-400">Status: {syncStatus}</span>
               </div>
             </div>
 
             <div className="space-y-6">
-              <WatchlistCard title="My Watchlist" items={watchlists.mine} emptyMessage="Nothing here. Enable auto-sync or add items in Plex." />
-              <WatchlistCard title="Friend's Watchlist" items={watchlists.friends} emptyMessage="Friend list is clear." />
+              <WatchlistCard title="My Watchlist" items={watchlists.mine} emptyMessage="Nothing here. Enable auto-sync or add items in Plex." onRemove={removeWatchlistItem} />
+              <WatchlistCard title="Friend's Watchlist" items={watchlists.friends} emptyMessage="Friend list is clear." onRemove={removeWatchlistItem} />
             </div>
 
             {gridEmpty && (
@@ -183,7 +220,7 @@ function App() {
                 { label: "Friend's Watchlist RSS", value: config.plex.rss_friend_url, onChange: (v) => handleInput('plex.rss_friend_url', v) },
               ]}
               toggles={[
-                { label: 'Auto Sync', value: config.plex.auto_sync_enabled, onChange: (v) => handleInput('plex.auto_sync_enabled', v) },
+                { label: 'Auto push to Radarr/Sonarr every 60s', value: config.plex.auto_sync_enabled, onChange: (v) => handleInput('plex.auto_sync_enabled', v) },
               ]}
               onTest={() => testService('plex')}
               testing={testing['plex']}
@@ -248,7 +285,7 @@ function SidebarItem({ icon, label, active, onClick }: any) {
   );
 }
 
-function WatchlistCard({ title, items, emptyMessage }: { title: string; items: WatchItem[]; emptyMessage: string }) {
+function WatchlistCard({ title, items, emptyMessage, onRemove }: { title: string; items: WatchItem[]; emptyMessage: string; onRemove?: (rating_key: string) => void }) {
   return (
     <div className="bg-background rounded-xl border border-gray-800 p-4 shadow-lg">
       <div className="flex items-center justify-between mb-3">
@@ -263,15 +300,30 @@ function WatchlistCard({ title, items, emptyMessage }: { title: string; items: W
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {items.map((item) => (
-            <div key={item.rating_key || item.title} className="bg-surface rounded-lg overflow-hidden border border-gray-800">
-              <div className="relative">
+            <div key={item.rating_key || item.title} className="bg-surface rounded-xl overflow-hidden border border-gray-800">
+              <div className="relative aspect-[2/3]">
                 <div
-                  className="h-56 bg-cover bg-center"
+                  className="absolute inset-0 bg-cover bg-center"
                   style={{ backgroundImage: item.poster ? `url(${item.poster})` : 'linear-gradient(135deg, #1f2937, #111827)' }}
                 />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 hover:opacity-100 transition-opacity">
+                  <div className="absolute bottom-0 w-full p-3 space-y-2 text-sm">
+                    <p className="font-semibold truncate">{item.title}</p>
+                    <p className="text-xs text-gray-300 max-h-14 overflow-hidden text-ellipsis">{item.summary || 'No synopsis available yet.'}</p>
+                  </div>
+                </div>
                 <span className={`absolute top-2 right-2 text-xs px-2 py-1 rounded-full ${statusColor(item.status)}`}>
                   {item.status === 'downloaded' ? 'Downloaded' : item.status === 'added' ? 'Monitored' : 'Not downloaded'}
                 </span>
+                {onRemove && (
+                  <button
+                    onClick={() => onRemove(item.rating_key)}
+                    className="absolute top-2 left-2 p-2 rounded-full bg-black/60 hover:bg-black/80 transition text-red-300 hover:text-red-100"
+                    title="Remove from watchlist"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
               <div className="p-3 space-y-1">
                 <p className="font-semibold truncate">{item.title}</p>
