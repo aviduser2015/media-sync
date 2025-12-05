@@ -200,6 +200,7 @@ class PlexService:
                 "tmdb_id": tmdb_id,
                 "thumb": item.get("thumb"),
                 "summary": item.get("summary"),
+                "rating_key": item.get("ratingKey") or rating_key,
                 "guid_type_hint": ids.get("type_hint"),
             }
         except Exception:
@@ -249,19 +250,24 @@ class PlexService:
                 ids = self._extract_ids_from_guid(guid)
                 type_hint = ids.get("type_hint") or self._infer_media_type(guid, category, link) or "movie"
 
-                # For ambiguous items, fetch Plex metadata to get the real type/id
-                meta = None
-                if ids.get("type_hint") is None or ("show" in category.lower() and type_hint == "movie"):
-                    meta = self._fetch_metadata(rating_key)
+                # Fetch Plex metadata to enrich and to ensure we have the canonical rating key
+                meta = self._fetch_metadata(rating_key)
                 resolved_type = meta.get("type") if meta else type_hint
                 tmdb_id = ids.get("tmdb_id") or (meta.get("tmdb_id") if meta else None)
                 poster_final = meta.get("thumb") if meta and meta.get("thumb") else poster
-                year_final = meta.get("year") if meta and meta.get("year") else year
+                year_final = str(meta.get("year")) if meta and meta.get("year") else year
                 summary_final = meta.get("summary") if meta and meta.get("summary") else description
+                rating_key_final = meta.get("rating_key") if meta and meta.get("rating_key") else rating_key
+                # If year still missing, try to parse from title tokens
+                if not year_final:
+                    for token in title.split():
+                        if token.isdigit() and len(token) == 4:
+                            year_final = token
+                            break
 
                 items.append({
                     "title": meta.get("title") if meta and meta.get("title") else title,
-                    "rating_key": rating_key,
+                    "rating_key": rating_key_final,
                     "type": resolved_type or "movie",
                     "year": year_final,
                     "poster": poster_final,
@@ -287,7 +293,10 @@ class PlexService:
         try:
             endpoint = f"https://metadata.provider.plex.tv/library/metadata/{urllib.parse.quote(str(rating_key))}/unwatchlist"
             resp = requests.put(endpoint, headers=self.headers, timeout=10)
+            if resp.status_code not in (200, 201, 204):
+                # Try POST fallback in case Plex expects it
+                resp = requests.post(endpoint, headers=self.headers, timeout=10)
             success = resp.status_code in (200, 201, 204)
-            return {"success": success, "status_code": resp.status_code}
+            return {"success": success, "status_code": resp.status_code, "body": resp.text}
         except Exception as e:
             return {"success": False, "error": str(e)}

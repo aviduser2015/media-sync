@@ -132,9 +132,13 @@ function App() {
 
   const removeWatchlistItem = async (rating_key: string) => {
     try {
-      await axios.post(`${API_URL}/watchlist/remove`, { rating_key });
-      await fetchWatchlists();
-      setSyncStatus('Item removed from Plex watchlist');
+      const res = await axios.post(`${API_URL}/watchlist/remove`, { rating_key });
+      if (res.data?.success) {
+        await fetchWatchlists();
+        setSyncStatus('Item removed from Plex watchlist');
+      } else {
+        setSyncStatus('Failed to remove from watchlist');
+      }
     } catch (err) {
       console.error(err);
       setSyncStatus('Failed to remove from watchlist');
@@ -286,6 +290,12 @@ function SidebarItem({ icon, label, active, onClick }: any) {
 }
 
 function WatchlistCard({ title, items, emptyMessage, onRemove }: { title: string; items: WatchItem[]; emptyMessage: string; onRemove?: (rating_key: string) => void }) {
+  const deriveYear = (item: WatchItem) => {
+    if (item.year) return item.year;
+    const tokens = (item.title || '').match(/\b(19|20)\d{2}\b/);
+    return tokens ? tokens[0] : '';
+  };
+
   return (
     <div className="bg-background rounded-xl border border-gray-800 p-4 shadow-lg">
       <div className="flex items-center justify-between mb-3">
@@ -327,7 +337,7 @@ function WatchlistCard({ title, items, emptyMessage, onRemove }: { title: string
               </div>
               <div className="p-3 space-y-1">
                 <p className="font-semibold truncate">{item.title}</p>
-                <p className="text-xs text-gray-400">{item.year || 'Year unknown'}</p>
+                <p className="text-xs text-gray-400">{deriveYear(item) || ' '}</p>
               </div>
             </div>
           ))}

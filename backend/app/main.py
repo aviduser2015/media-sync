@@ -261,6 +261,7 @@ def remove_watchlist_item(payload: dict = Body(...), db: Session = Depends(datab
     plex = services.PlexService("", p_token)
     resp = plex.remove_from_watchlist(rating_key)
     if not resp.get("success"):
+        logger.warning(f"Failed to remove watchlist item {rating_key}: {resp}")
         raise HTTPException(status_code=400, detail=f"Failed to remove item: {resp}")
     return {"success": True}
 
