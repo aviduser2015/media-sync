@@ -1,0 +1,21 @@
+  GNU nano 7.2                                               docker-compose.yml                                                        
+version: "3.8"
+
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: media-sync
+    ports:
+      - "8090:8090"
+    networks:
+      - media-network
+    volumes:
+      - ./config:/config
+    restart: unless-stopped
+
+networks:
+  media-network:
+    external: true
+    name: media-network
