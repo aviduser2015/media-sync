@@ -326,6 +326,11 @@ function WatchlistCard({ title, items, emptyMessage, onRemove }: { title: string
                 <span className={`absolute top-2 right-2 text-xs px-2 py-1 rounded-full ${statusColor(item.status)}`}>
                   {item.status === 'downloaded' ? 'Downloaded' : item.status === 'added' ? 'Monitored' : 'Not downloaded'}
                 </span>
+                {item.source && (
+                  <span className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded-full bg-black/60 text-gray-200">
+                    {item.source === 'friends' ? 'Friend' : 'Me'}
+                  </span>
+                )}
                 {onRemove && (
                   <button
                     onClick={() => onRemove(item.rating_key)}

@@ -107,7 +107,16 @@ class PlexService:
     def __init__(self, url: str, token: str):
         self.url = url.rstrip("/")
         self.token = token
-        self.headers = {"X-Plex-Token": token, "Accept": "application/json"}
+        self.client_id = "mediasync-agent"
+        self.headers = {
+            "X-Plex-Token": token,
+            "Accept": "application/json",
+            "X-Plex-Product": "MediaSync",
+            "X-Plex-Client-Identifier": self.client_id,
+        }
+
+    def _normalize_guid(self, guid: str) -> str:
+        return (guid or "").replace("://", ":").split("?")[0].lower()
 
     def test_connection(self) -> Dict[str, Any]:
         try:
@@ -142,6 +151,7 @@ class PlexService:
                         "tmdb_id": tmdb_id,
                         "summary": item.get("summary"),
                         "thumb": item.get("thumb"),
+                        "normalized_guid": self._normalize_guid(guid),
                     })
             return items
         except Exception:
@@ -178,6 +188,22 @@ class PlexService:
 
         return ids
 
+    def _lookup_metadata_by_guid(self, guid: str) -> Optional[Dict[str, Any]]:
+        if not guid:
+            return None
+        try:
+            endpoint = f"https://metadata.provider.plex.tv/library/metadata"
+            resp = requests.get(endpoint, headers=self.headers, params={"guid": guid}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            meta = data.get("MediaContainer", {}).get("Metadata", [])
+            if not meta:
+                return None
+            item = meta[0]
+            return item
+        except Exception:
+            return None
+
     def _resolve_rating_key(self, key: str) -> Optional[str]:
         """
         Convert a guid-style key (e.g., tvdb://123) to a Plex metadata ratingKey if possible.
@@ -186,13 +212,20 @@ class PlexService:
             return None
         if str(key).isdigit():
             return str(key)
+        # Try direct metadata fetch
         meta = self._fetch_metadata(key)
         if meta and meta.get("rating_key"):
             return str(meta["rating_key"])
+        # Try GUID lookup endpoint
+        meta_lookup = self._lookup_metadata_by_guid(key)
+        if meta_lookup and meta_lookup.get("ratingKey"):
+            return str(meta_lookup.get("ratingKey"))
         # Try to resolve via current watchlist contents
         watch = self.get_watchlist()
         for item in watch:
-            if str(item.get("rating_key")) == str(key) or str(item.get("guid")) == str(key):
+            guid_val = (item.get("guid") or "").split("?")[0]
+            key_clean = str(key).split("?")[0]
+            if str(item.get("rating_key")) == str(key) or guid_val == key_clean:
                 rk = item.get("rating_key")
                 if rk:
                     return str(rk)
@@ -204,7 +237,10 @@ class PlexService:
             return None
         watch = self.get_watchlist()
         for item in watch:
-            if str(item.get("rating_key")) == str(rating_key) or str(item.get("guid")) == str(rating_key):
+            rk_clean = str(item.get("rating_key")).split("?")[0].lower()
+            guid_clean = self._normalize_guid(str(item.get("guid")))
+            incoming = self._normalize_guid(str(rating_key))
+            if rk_clean == incoming or guid_clean == incoming:
                 return item
         return None
 
@@ -256,6 +292,8 @@ class PlexService:
             resp = requests.get(url, headers={"Accept": "application/rss+xml"}, timeout=20)
             resp.raise_for_status()
             root = ET.fromstring(resp.text)
+            watch = self.get_watchlist()
+            guid_map = {item.get("normalized_guid"): item for item in watch if item.get("normalized_guid")}
             items: List[Dict[str, Any]] = []
             for item in root.iter("item"):
                 title = item.findtext("title") or "Untitled"
@@ -285,14 +323,15 @@ class PlexService:
 
                 # Fetch Plex metadata to enrich and to ensure we have the canonical rating key
                 resolved_for_meta = self._resolve_rating_key(rating_key) or rating_key
-                meta = self._fetch_metadata(resolved_for_meta)
-                watch_match = self._get_watchlist_match(resolved_for_meta)
+                meta = self._fetch_metadata(resolved_for_meta) or self._lookup_metadata_by_guid(guid)
+                watch_match = guid_map.get(self._normalize_guid(guid)) or self._get_watchlist_match(resolved_for_meta)
                 resolved_type = meta.get("type") if meta else type_hint
                 tmdb_id = ids.get("tmdb_id") or (meta.get("tmdb_id") if meta else None)
                 poster_final = meta.get("thumb") if meta and meta.get("thumb") else watch_match.get("thumb") if watch_match else poster
                 year_final = str(meta.get("year")) if meta and meta.get("year") else year
                 summary_final = meta.get("summary") if meta and meta.get("summary") else (watch_match.get("summary") if watch_match else None) or description
                 rating_key_final = meta.get("rating_key") if meta and meta.get("rating_key") else (watch_match.get("rating_key") if watch_match else rating_key)
+                guid_final = guid if guid else (watch_match.get("guid") if watch_match else "")
                 # If year still missing, try to parse from title tokens
                 if not year_final:
                     for token in title.split():
@@ -303,6 +342,7 @@ class PlexService:
                 items.append({
                     "title": meta.get("title") if meta and meta.get("title") else title,
                     "rating_key": rating_key_final,
+                    "guid": guid_final,
                     "type": resolved_type or "movie",
                     "year": year_final,
                     "poster": poster_final,
@@ -327,6 +367,12 @@ class PlexService:
         """
         try:
             resolved = self._resolve_rating_key(rating_key) or rating_key
+            # Try provider remove endpoint (supports guid) if non-numeric
+            if not str(resolved).isdigit():
+                discover_endpoint = "https://discover.provider.plex.tv/watchlist/remove"
+                resp = requests.post(discover_endpoint, headers=self.headers, params={"guid": resolved}, timeout=10)
+                if resp.status_code in (200, 201, 204):
+                    return {"success": True, "status_code": resp.status_code, "body": resp.text, "resolved_rating_key": resolved}
             endpoint = f"https://metadata.provider.plex.tv/library/metadata/{urllib.parse.quote(str(resolved))}/unwatchlist"
             resp = requests.put(endpoint, headers=self.headers, timeout=10)
             if resp.status_code not in (200, 201, 204):
