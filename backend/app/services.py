@@ -135,10 +135,13 @@ class PlexService:
                         tmdb_id = guid.split("://", 1)[1].split("?")[0]
                     items.append({
                         "rating_key": str(item.get("ratingKey")),
+                        "guid": guid,
                         "type": item_type,
                         "title": item.get("title"),
                         "year": item.get("year"),
                         "tmdb_id": tmdb_id,
+                        "summary": item.get("summary"),
+                        "thumb": item.get("thumb"),
                     })
             return items
         except Exception:
@@ -186,6 +189,23 @@ class PlexService:
         meta = self._fetch_metadata(key)
         if meta and meta.get("rating_key"):
             return str(meta["rating_key"])
+        # Try to resolve via current watchlist contents
+        watch = self.get_watchlist()
+        for item in watch:
+            if str(item.get("rating_key")) == str(key) or str(item.get("guid")) == str(key):
+                rk = item.get("rating_key")
+                if rk:
+                    return str(rk)
+        return None
+
+    def _get_watchlist_match(self, rating_key: str) -> Optional[Dict[str, Any]]:
+        """Best-effort match for an item in the live Plex watchlist."""
+        if not rating_key:
+            return None
+        watch = self.get_watchlist()
+        for item in watch:
+            if str(item.get("rating_key")) == str(rating_key) or str(item.get("guid")) == str(rating_key):
+                return item
         return None
 
     def _fetch_metadata(self, rating_key: str) -> Optional[Dict[str, Any]]:
@@ -266,12 +286,13 @@ class PlexService:
                 # Fetch Plex metadata to enrich and to ensure we have the canonical rating key
                 resolved_for_meta = self._resolve_rating_key(rating_key) or rating_key
                 meta = self._fetch_metadata(resolved_for_meta)
+                watch_match = self._get_watchlist_match(resolved_for_meta)
                 resolved_type = meta.get("type") if meta else type_hint
                 tmdb_id = ids.get("tmdb_id") or (meta.get("tmdb_id") if meta else None)
-                poster_final = meta.get("thumb") if meta and meta.get("thumb") else poster
+                poster_final = meta.get("thumb") if meta and meta.get("thumb") else watch_match.get("thumb") if watch_match else poster
                 year_final = str(meta.get("year")) if meta and meta.get("year") else year
-                summary_final = meta.get("summary") if meta and meta.get("summary") else description
-                rating_key_final = meta.get("rating_key") if meta and meta.get("rating_key") else rating_key
+                summary_final = meta.get("summary") if meta and meta.get("summary") else (watch_match.get("summary") if watch_match else None) or description
+                rating_key_final = meta.get("rating_key") if meta and meta.get("rating_key") else (watch_match.get("rating_key") if watch_match else rating_key)
                 # If year still missing, try to parse from title tokens
                 if not year_final:
                     for token in title.split():
