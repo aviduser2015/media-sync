@@ -10,6 +10,13 @@ class Setting(Base):
     value = Column(String)
     type = Column(String)
 
+class SyncMap(Base):
+    __tablename__ = "sync_map"
+    plex_rating_key = Column(String, primary_key=True, index=True)
+    arr_id = Column(Integer, index=True)
+    type = Column(String)  # 'movie' or 'show'
+    status = Column(String, default="added")  # added | downloaded
+
 class JobHistory(Base):
     __tablename__ = "job_history"
     id = Column(Integer, primary_key=True, index=True)
