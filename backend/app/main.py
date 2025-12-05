@@ -95,18 +95,22 @@ def run_sync(db: Session) -> Dict[str, Any]:
     s_root = get_setting(db, "sonarr.root_folder", "/tv")
 
     p_token = get_setting(db, "plex.token")
+    rss_my = get_setting(db, "plex.rss_my_url", "")
+    rss_friend = get_setting(db, "plex.rss_friend_url", "")
 
     if not p_token:
         raise HTTPException(status_code=400, detail="Plex token not configured")
 
     plex = services.PlexService("", p_token)
-    watchlist = plex.get_watchlist()
-    if not watchlist:
+    watchlists = plex.get_rss_watchlists(rss_my, rss_friend)
+    combined_watchlist = (watchlists.get("mine", []) or []) + (watchlists.get("friends", []) or [])
+    if not combined_watchlist:
         logger.info("Watchlist empty or unreachable.")
         return {"movies": {"added": [], "skipped": [], "errors": []}, "shows": {"added": [], "skipped": [], "errors": []}}
 
-    movies = [item for item in watchlist if item.get("type") == "movie"]
-    shows = [item for item in watchlist if item.get("type") == "show"]
+    # Default RSS items to movies unless specified
+    movies = [item for item in combined_watchlist if item.get("type") == "movie" or not item.get("type")]
+    shows = [item for item in combined_watchlist if item.get("type") == "show"]
 
     stats = {"movies": {"added": [], "skipped": [], "errors": []}, "shows": {"added": [], "skipped": [], "errors": []}}
 
@@ -168,7 +172,10 @@ def get_config(db: Session = Depends(database.get_db)):
     return GlobalSettings(
         plex=PlexConfig(
             url=get_setting(db, "plex.url", "http://localhost:32400"),
-            token=get_setting(db, "plex.token", "")
+            token=get_setting(db, "plex.token", ""),
+            rss_my_url=get_setting(db, "plex.rss_my_url", ""),
+            rss_friend_url=get_setting(db, "plex.rss_friend_url", ""),
+            auto_sync_enabled=bool(get_setting(db, "plex.auto_sync", ""))
         ),
         radarr=RadarrConfig(
             url=get_setting(db, "radarr.url", "http://radarr:7878"),
@@ -200,6 +207,9 @@ def update_config(settings: GlobalSettings, db: Session = Depends(database.get_d
 
     set_setting(db, "plex.url", settings.plex.url)
     set_setting(db, "plex.token", settings.plex.token)
+    set_setting(db, "plex.rss_my_url", settings.plex.rss_my_url)
+    set_setting(db, "plex.rss_friend_url", settings.plex.rss_friend_url)
+    set_setting(db, "plex.auto_sync", "1" if settings.plex.auto_sync_enabled else "")
     return {"message": "Configuration saved"}
 
 @app.post("/api/services/test")
@@ -228,6 +238,30 @@ def manual_sync_trigger(db: Session = Depends(database.get_db)):
             "skipped": combined_skipped,
             "details": stats
         }
+    }
+
+@app.get("/api/watchlists")
+def get_watchlists(db: Session = Depends(database.get_db)):
+    p_token = get_setting(db, "plex.token")
+    rss_my = get_setting(db, "plex.rss_my_url", "")
+    rss_friend = get_setting(db, "plex.rss_friend_url", "")
+    if not p_token:
+        raise HTTPException(status_code=400, detail="Plex token not configured")
+    plex = services.PlexService("", p_token)
+    data = plex.get_rss_watchlists(rss_my, rss_friend)
+
+    status_map = {row.plex_rating_key: row.status for row in db.query(models.SyncMap).all()}
+    def annotate(items):
+        enriched = []
+        for item in items:
+            rk = item.get("rating_key") or item.get("title")
+            status = status_map.get(rk, "not_downloaded")
+            enriched.append({**item, "status": status})
+        return enriched
+
+    return {
+        "mine": annotate(data.get("mine", [])),
+        "friends": annotate(data.get("friends", [])),
     }
 
 # --- FRONTEND STATIC FILES ---

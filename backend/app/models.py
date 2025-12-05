@@ -43,7 +43,10 @@ class SonarrConfig(BaseModel):
 class PlexConfig(BaseModel):
     url: str = "http://localhost:32400"
     token: str = ""
+    rss_my_url: str = ""
+    rss_friend_url: str = ""
     enable_watchlist_cleanup: bool = False
+    auto_sync_enabled: bool = False
 
 class GlobalSettings(BaseModel):
     plex: PlexConfig

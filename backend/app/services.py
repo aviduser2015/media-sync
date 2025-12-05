@@ -1,5 +1,6 @@
 import requests
 import urllib.parse
+import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 
 class BaseArrService:
@@ -142,3 +143,49 @@ class PlexService:
             return items
         except Exception:
             return []
+
+    def _parse_rss_feed(self, url: str, source: str) -> List[Dict[str, Any]]:
+        try:
+            resp = requests.get(url, headers={"Accept": "application/rss+xml"}, timeout=20)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.text)
+            items: List[Dict[str, Any]] = []
+            for item in root.iter("item"):
+                title = item.findtext("title") or "Untitled"
+                link = item.findtext("link") or ""
+                guid = item.findtext("guid") or item.findtext("id") or link
+                # Attempt to extract a rating key or tmdb/imdb id from the guid/link
+                rating_key = ""
+                if "metadata" in link:
+                    parts = link.rstrip("/").split("/")
+                    rating_key = parts[-1]
+                elif guid:
+                    rating_key = guid
+                poster = ""
+                thumb = item.find("{http://search.yahoo.com/mrss/}thumbnail")
+                if thumb is not None:
+                    poster = thumb.attrib.get("url", "")
+                year = ""
+                description = item.findtext("description") or ""
+                # Best-effort year extraction
+                for token in title.split():
+                    if token.isdigit() and len(token) == 4:
+                        year = token
+                        break
+                items.append({
+                    "title": title,
+                    "rating_key": rating_key,
+                    "type": "movie",
+                    "year": year,
+                    "poster": poster,
+                    "source": source,
+                })
+            return items
+        except Exception:
+            return []
+
+    def get_rss_watchlists(self, my_url: str, friend_url: str) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "mine": self._parse_rss_feed(my_url, "mine") if my_url else [],
+            "friends": self._parse_rss_feed(friend_url, "friends") if friend_url else []
+        }
