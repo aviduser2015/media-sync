@@ -175,6 +175,19 @@ class PlexService:
 
         return ids
 
+    def _resolve_rating_key(self, key: str) -> Optional[str]:
+        """
+        Convert a guid-style key (e.g., tvdb://123) to a Plex metadata ratingKey if possible.
+        """
+        if not key:
+            return None
+        if str(key).isdigit():
+            return str(key)
+        meta = self._fetch_metadata(key)
+        if meta and meta.get("rating_key"):
+            return str(meta["rating_key"])
+        return None
+
     def _fetch_metadata(self, rating_key: str) -> Optional[Dict[str, Any]]:
         """Look up metadata from Plex provider to disambiguate movies vs series."""
         if not rating_key:
@@ -251,7 +264,8 @@ class PlexService:
                 type_hint = ids.get("type_hint") or self._infer_media_type(guid, category, link) or "movie"
 
                 # Fetch Plex metadata to enrich and to ensure we have the canonical rating key
-                meta = self._fetch_metadata(rating_key)
+                resolved_for_meta = self._resolve_rating_key(rating_key) or rating_key
+                meta = self._fetch_metadata(resolved_for_meta)
                 resolved_type = meta.get("type") if meta else type_hint
                 tmdb_id = ids.get("tmdb_id") or (meta.get("tmdb_id") if meta else None)
                 poster_final = meta.get("thumb") if meta and meta.get("thumb") else poster
@@ -291,12 +305,13 @@ class PlexService:
         Note: Plex uses provider metadata ids; rating_key must match the Plex metadata id.
         """
         try:
-            endpoint = f"https://metadata.provider.plex.tv/library/metadata/{urllib.parse.quote(str(rating_key))}/unwatchlist"
+            resolved = self._resolve_rating_key(rating_key) or rating_key
+            endpoint = f"https://metadata.provider.plex.tv/library/metadata/{urllib.parse.quote(str(resolved))}/unwatchlist"
             resp = requests.put(endpoint, headers=self.headers, timeout=10)
             if resp.status_code not in (200, 201, 204):
                 # Try POST fallback in case Plex expects it
                 resp = requests.post(endpoint, headers=self.headers, timeout=10)
             success = resp.status_code in (200, 201, 204)
-            return {"success": success, "status_code": resp.status_code, "body": resp.text}
+            return {"success": success, "status_code": resp.status_code, "body": resp.text, "resolved_rating_key": resolved}
         except Exception as e:
             return {"success": False, "error": str(e)}

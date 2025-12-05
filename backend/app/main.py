@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, Depends, HTTPException, Body
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 
 from . import models, database, services
 from .models import GlobalSettings, RadarrConfig, SonarrConfig, PlexConfig
+
+scheduler: Optional[BackgroundScheduler] = None
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
@@ -97,6 +99,7 @@ def run_sync(db: Session) -> Dict[str, Any]:
     p_token = get_setting(db, "plex.token")
     rss_my = get_setting(db, "plex.rss_my_url", "")
     rss_friend = get_setting(db, "plex.rss_friend_url", "")
+    auto_interval = int(get_setting(db, "plex.auto_sync_interval_seconds", "60") or 60)
 
     if not p_token:
         raise HTTPException(status_code=400, detail="Plex token not configured")
@@ -156,6 +159,8 @@ def background_sync_job():
         if not auto_enabled:
             logger.info("Auto sync disabled; skipping scheduled push.")
             return
+        interval = int(get_setting(db, "plex.auto_sync_interval_seconds", "60") or 60)
+        logger.info(f"Auto sync running (interval {interval}s)")
         stats = run_sync(db)
         logger.info(f"Sync complete. Movies added: {len(stats['movies']['added'])}, Shows added: {len(stats['shows']['added'])}")
     except Exception as e:
@@ -166,12 +171,19 @@ def background_sync_job():
 # --- LIFECYCLE ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global scheduler
     scheduler = BackgroundScheduler()
-    scheduler.add_job(background_sync_job, IntervalTrigger(seconds=60), id="sync_job", replace_existing=True)
+    db = database.SessionLocal()
+    try:
+        interval = int(get_setting(db, "plex.auto_sync_interval_seconds", "60") or 60)
+    finally:
+        db.close()
+    scheduler.add_job(background_sync_job, IntervalTrigger(seconds=max(10, interval)), id="sync_job", replace_existing=True)
     scheduler.start()
     logger.info("Scheduler started.")
     yield
     scheduler.shutdown()
+    scheduler = None
 
 app = FastAPI(title="Media Sync Manager", version="1.0.0", lifespan=lifespan)
 
@@ -185,7 +197,8 @@ def get_config(db: Session = Depends(database.get_db)):
             token=get_setting(db, "plex.token", ""),
             rss_my_url=get_setting(db, "plex.rss_my_url", ""),
             rss_friend_url=get_setting(db, "plex.rss_friend_url", ""),
-            auto_sync_enabled=str(get_setting(db, "plex.auto_sync", "")).lower() in ("1", "true", "yes", "on")
+            auto_sync_enabled=str(get_setting(db, "plex.auto_sync", "")).lower() in ("1", "true", "yes", "on"),
+            auto_sync_interval_seconds=int(get_setting(db, "plex.auto_sync_interval_seconds", "60") or 60)
         ),
         radarr=RadarrConfig(
             url=get_setting(db, "radarr.url", "http://radarr:7878"),
@@ -220,6 +233,12 @@ def update_config(settings: GlobalSettings, db: Session = Depends(database.get_d
     set_setting(db, "plex.rss_my_url", settings.plex.rss_my_url)
     set_setting(db, "plex.rss_friend_url", settings.plex.rss_friend_url)
     set_setting(db, "plex.auto_sync", "1" if settings.plex.auto_sync_enabled else "")
+    set_setting(db, "plex.auto_sync_interval_seconds", str(settings.plex.auto_sync_interval_seconds or 60))
+    try:
+        if scheduler:
+            scheduler.reschedule_job("sync_job", trigger=IntervalTrigger(seconds=max(10, settings.plex.auto_sync_interval_seconds or 60)))
+    except Exception as e:
+        logger.warning(f"Could not reschedule auto sync job: {e}")
     return {"message": "Configuration saved"}
 
 @app.post("/api/services/test")

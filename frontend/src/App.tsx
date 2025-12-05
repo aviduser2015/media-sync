@@ -17,7 +17,7 @@ type WatchItem = {
 type Watchlists = { mine: WatchItem[]; friends: WatchItem[] };
 
 type Config = {
-  plex: { url: string; token: string; rss_my_url: string; rss_friend_url: string; auto_sync_enabled: boolean };
+  plex: { url: string; token: string; rss_my_url: string; rss_friend_url: string; auto_sync_enabled: boolean; auto_sync_interval_seconds: number };
   radarr: { url: string; api_key: string; quality_profile_id: number; root_folder_path: string };
   sonarr: { url: string; api_key: string; quality_profile_id: number; root_folder_path: string };
 };
@@ -222,9 +222,10 @@ function App() {
                 { label: 'Token', value: config.plex.token, onChange: (v) => handleInput('plex.token', v), type: 'password' },
                 { label: 'My Watchlist RSS', value: config.plex.rss_my_url, onChange: (v) => handleInput('plex.rss_my_url', v) },
                 { label: "Friend's Watchlist RSS", value: config.plex.rss_friend_url, onChange: (v) => handleInput('plex.rss_friend_url', v) },
+                { label: 'Auto push interval (seconds)', value: config.plex.auto_sync_interval_seconds, onChange: (v) => handleInput('plex.auto_sync_interval_seconds', Number(v)), type: 'number' },
               ]}
               toggles={[
-                { label: 'Auto push to Radarr/Sonarr every 60s', value: config.plex.auto_sync_enabled, onChange: (v) => handleInput('plex.auto_sync_enabled', v) },
+                { label: 'Enable auto push', value: config.plex.auto_sync_enabled, onChange: (v) => handleInput('plex.auto_sync_enabled', v) },
               ]}
               onTest={() => testService('plex')}
               testing={testing['plex']}
